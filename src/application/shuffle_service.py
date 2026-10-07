@@ -74,6 +74,7 @@ class ShuffleAppService:
                 time.sleep(1)  # 等待清空生效
 
             # 5. 插入播放队列
+            #    若勾选清空队列，则插入第一首后立即播放，其余歌曲继续静默插入
             song_ids = [s.id for s in shuffled]
             song_names = {s.id: f"{s.name} - {s.artist}" for s in shuffled}
             logger.info(f"开始插入播放队列，共 {len(song_ids)} 首")
@@ -83,6 +84,7 @@ class ShuffleAppService:
                 progress_callback=request.progress_callback,
                 current_song_callback=request.current_song_callback,
                 stop_event=request.stop_event,
+                play_first=request.clear_queue,
             )
 
             if not insert_success:

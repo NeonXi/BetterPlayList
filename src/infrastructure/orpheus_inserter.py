@@ -17,7 +17,8 @@ class QueueInserter(ABC):
                song_names: dict[str, str] = None,
                progress_callback: Callable[[int, int], None] = None,
                current_song_callback: Callable[[str], None] = None,
-               stop_event: threading.Event = None) -> bool:
+               stop_event: threading.Event = None,
+               play_first: bool = False) -> bool:
         """
         按顺序将歌曲插入播放队列
         :param song_ids: 歌曲ID列表（按期望的播放顺序）
@@ -25,6 +26,7 @@ class QueueInserter(ABC):
         :param progress_callback: 进度回调 callback(current, total)
         :param current_song_callback: 当前插入歌曲回调 callback(song_name)
         :param stop_event: 停止事件，用于中途取消
+        :param play_first: 插入第一首后立即播放，其余歌曲继续插入
         :return: 是否完整插入成功（未被中途停止）
         """
         ...
@@ -50,9 +52,11 @@ class OrpheusInserter(QueueInserter):
                song_names: dict[str, str] = None,
                progress_callback: Callable[[int, int], None] = None,
                current_song_callback: Callable[[str], None] = None,
-               stop_event: threading.Event = None) -> bool:
+               stop_event: threading.Event = None,
+               play_first: bool = False) -> bool:
         """
         逆序批量插入播放队列
+        :param play_first: 插入第一首后立即播放，其余歌曲继续插入
         :return: True=全部插入完成, False=被中途停止
         """
         total = len(song_ids)
@@ -70,8 +74,18 @@ class OrpheusInserter(QueueInserter):
         song_names = song_names or {}
         stop_event = stop_event or threading.Event()
 
+        # 构建插入顺序：
+        # addToNext 总是插到"当前播放歌曲的下一首"，多次插入按逆序堆叠，
+        # 所以要逆序插入才能保证最终顺序正确
+        if play_first:
+            # 第一首歌先插入并立即播放成为"当前歌曲"，
+            # 剩余歌曲仍按逆序插入（依次堆叠到当前歌曲之后），最终顺序不变
+            insert_order = [song_ids[0]] + list(reversed(song_ids[1:]))
+        else:
+            insert_order = list(reversed(song_ids))
+
         # 逆序插入，保证最终顺序正确
-        for index, song_id in enumerate(reversed(song_ids)):
+        for index, song_id in enumerate(insert_order):
             # 检查是否被停止
             if stop_event.is_set():
                 return False
@@ -97,6 +111,18 @@ class OrpheusInserter(QueueInserter):
                     cmd = dict(self.ADD_TO_NEXT_TEMPLATE)
                     cmd["value"] = song_id
                     OrpheusClient.send(cmd)
+
+            # 第一首歌插入后立即播放（清空队列场景，让用户马上听到歌）
+            if play_first and index == 0:
+                time.sleep(0.3)  # 稍等队列稳定
+                played = self.play_song(song_id)
+                if played:
+                    # 等待播放真正开始，确保后续 ADD_NEXT 相对当前歌曲插入
+                    time.sleep(0.8)
+                else:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"[PLAY] 第一首播放失败，继续插入: {song_id}")
 
             # 汇报当前插入的歌曲
             if current_song_callback:
@@ -146,3 +172,27 @@ class OrpheusInserter(QueueInserter):
         cmd = dict(self.ADD_TO_NEXT_TEMPLATE)
         cmd["value"] = song_id
         return OrpheusClient.send(cmd)
+
+    def play_song(self, song_id: str) -> bool:
+        """
+        播放指定歌曲（静默优先，回退 orpheus）
+        :param song_id: 歌曲 ID
+        :return: 是否成功
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Awoo 静默通道（带一次重试）
+        if AwooClient.is_available():
+            played = AwooClient.play(song_id)
+            if not played:
+                time.sleep(0.15)
+                played = AwooClient.play(song_id)
+            if played:
+                logger.info(f"[PLAY] Awoo 管道播放成功: {song_id}")
+                return True
+            logger.warning(f"[PLAY] Awoo 管道播放失败: {song_id}")
+
+        # 回退 orpheus 协议
+        logger.info(f"[PLAY] 回退 orpheus 协议播放: {song_id}")
+        return OrpheusClient.play_song(song_id)
