@@ -24,6 +24,7 @@ BetterPlayList 通过**自定义随机算法 + 静默队列插入**解决这些�
 ### 🔇 静默队列插入（核心亮点）
 
 - **AwooMusicBot 管道通信**：通过命名管道直接向网易云进程发送指令，**完全静默，不唤起窗口**
+- **一键 DLL 注入**：无需安装 AwooMusicBot，程序自动查找 DLL 并注入到网易云进程
 - **智能回退**：Awoo 不可用时自动降级到 `orpheus://` 协议，仍保持最小干扰
 - **逐首插入 + 失败重试**：每首歌独立检测通道状态，失败自动重试，确保插入成功率
 
@@ -56,6 +57,7 @@ BetterPlayList 通过**自定义随机算法 + 静默队列插入**解决这些�
 | **requests** | 网易云 API 请求 |
 | **cryptography** | DPAPI 解密 + AES-GCM 解密本地 Cookie |
 | **Windows Named Pipe** | 与 AwooMusicBot 注入 DLL 通信 |
+| **CreateRemoteThread + LoadLibraryW** | DLL 注入到网易云进程 |
 | **ShellExecuteW + SW_HIDE** | 静默调用 `orpheus://` 协议 |
 | **Fisher-Yates Shuffle** | 公平随机洗牌算法 |
 
@@ -71,7 +73,35 @@ Chrome DPAPI 解密 → AES-GCM 解密 → 提取 MUSIC_U 等关键 Cookie
 
 无需用户手动输入账号密码，实现"已骇入本地账户"的无感登录体验。
 
-### 2. AwooMusicBot 管道静默通信（重点借鉴）
+### 2. 一键 DLL 注入（v2.0 新增）
+
+为了让用户**无需安装 AwooMusicBot** 也能使用静默插入，v2.0 内置了 DLL 注入功能：
+
+**工作原理**：
+
+```
+启动时自动检测
+    ↓
+找到 AwooNcmCefBridge.dll？（优先程序捆绑的 assets/，其次嗷呜点歌机安装目录）
+    ↓
+网易云运行中？ → 未运行：按钮禁用，提示"网易云未运行"
+    ↓
+已注入？ → 已注入：按钮显示"已注入"，状态为"静默通道已就绪"
+    ↓
+未注入：点击"注入静默通道"按钮
+    ↓
+CreateRemoteThread + LoadLibraryW 注入 DLL 到 cloudmusic.exe
+    ↓
+注入成功 → 静默通道就绪，后续插入完全静默
+```
+
+**DLL 查找优先级**：
+1. 程序捆绑的 `assets/AwooNcmCefBridge.dll`（打包时嵌入，推荐）
+2. 嗷呜点歌机安装目录（`%APPDATA%\嗷呜点歌机\...`）
+
+> ⚠️ **注意**：DLL 注入需要目标进程的写权限，如果网易云以管理员身份运行，本程序也需要以管理员身份运行才能注入成功。
+
+### 3. AwooMusicBot 管道静默通信（重点借鉴）
 
 本项目最核心的静默插入功能，**深受 [AwooMusicBot](https://github.com/MikkoAbudo/AwooMusicBot)（嗷呜点歌机）项目的启发**。
 
@@ -98,7 +128,7 @@ AwooMusicBot 通过 DLL 注入技术，将 `AwooNcmCefBridge.dll` 注入到网�
 - **静默兜底**：Awoo 可用但插入失败时**静默跳过**，绝不回退到会唤起窗口的方案
 - **动态间隔**：Awoo 模式下 50ms/首，orpheus 回退时 1000ms/首
 
-### 3. orpheus:// 协议静默调用
+### 4. orpheus:// 协议静默调用
 
 当 AwooMusicBot 不可用时，回退到网易云官方的 `orpheus://` URL Scheme：
 
@@ -108,7 +138,7 @@ ShellExecuteW(None, "open", url, None, None, SW_HIDE)
 
 配合 `SW_HIDE` 参数和焦点归还机制，最大程度减少窗口干扰。
 
-### 4. 可配置分散随机算法
+### 5. 可配置分散随机算法
 
 在 Fisher-Yates 公平洗牌基础上，引入**冲突最小化贪心算法**：
 
@@ -128,6 +158,8 @@ BetterPlayList/
 ├── main.py                          # 程序入口
 ├── build.py                         # PyInstaller 打包脚本
 ├── requirements.txt                 # Python 依赖
+├── assets/                          # 打包资源（不上传 Git）
+│   └── AwooNcmCefBridge.dll         # 静默插入 DLL（v2.0 捆绑）
 ├── src/
 │   ├── application/                 # 应用层
 │   │   ├── dto.py                   # 数据传输对象
@@ -143,6 +175,7 @@ BetterPlayList/
 │   │   ├── ncm_api_client.py        # 网易云 API 客户端
 │   │   ├── ncm_local_cookie.py      # 本地 Cookie 读取
 │   │   ├── cached_playlist_fetcher.py  # 歌单缓存
+│   │   ├── dll_injector.py          # DLL 注入器（v2.0 新增）
 │   │   ├── awoo_client.py           # AwooMusicBot 管道客户端
 │   │   ├── orpheus_client.py        # orpheus:// 协议客户端
 │   │   ├── orpheus_inserter.py      # 队列插入器
@@ -163,7 +196,7 @@ BetterPlayList/
 
 - Windows 10 / 11
 - 网易云音乐 PC 客户端（已登录）
-- （推荐）安装 [AwooMusicBot](https://github.com/MikkoAbudo/AwooMusicBot) 以获得完全静默体验
+- **v2.0 起无需安装 AwooMusicBot**，程序内置 DLL 注入功能，一键启用静默插入
 
 ### 运行方式
 
@@ -188,14 +221,15 @@ python build.py
 ### 操作步骤
 
 1. 启动程序，自动读取本地 Cookie 登录
-2. 点击"加载我的歌单"或输入分享链接
-3. 选择随机算法和参数
-4. 点击"写入播放列表"
-5. 回到网易云客户端，队列已更新
+2. 如网易云已在运行，点击"**注入静默通道**"按钮（一键注入 DLL，无需安装 AwooMusicBot）
+3. 点击"加载我的歌单"或输入分享链接
+4. 选择随机算法和参数
+5. 点击"写入播放列表"
+6. 回到网易云客户端，队列已更新
 
 ## 致谢
 
-- **[AwooMusicBot](https://github.com/MikkoAbudo/AwooMusicBot)**（嗷呜点歌机）— 本项目最核心的静默插入功能深受其启发，感谢作者开源了如此优雅的 DLL 注入 + 命名管道通信方案
+- **[AwooMusicBot](https://github.com/MikkoAbudo/AwooMusicBot)**（嗷呜点歌机）— 本项目最核心的静默插入功能深受其启发。`AwooNcmCefBridge.dll` 来自该项目，感谢作者开源了如此优雅的 DLL 注入 + 命名管道通信方案
 - **网易云音乐** — 提供了 `orpheus://` URL Scheme 和本地数据存储
 
 ## 免责声明

@@ -395,6 +395,30 @@ class MainWindow:
         )
         self.stop_btn.pack(side="left", padx=5)
 
+        # DLL 注入按钮行
+        inject_frame = ttk.Frame(self.left_panel)
+        inject_frame.pack(pady=(2, 2))
+
+        self.inject_btn = ttk.Button(
+            inject_frame,
+            text="注入静默通道",
+            command=self._on_inject_dll,
+            width=14
+        )
+        self.inject_btn.pack(side="left", padx=5)
+
+        self.inject_status_var = tk.StringVar(value="")
+        self.inject_status_label = ttk.Label(
+            inject_frame,
+            textvariable=self.inject_status_var,
+            foreground=FG_SECONDARY,
+            font=("Microsoft YaHei", 8)
+        )
+        self.inject_status_label.pack(side="left", padx=5)
+
+        # 初始化时检测 DLL 状态
+        self._check_dll_status()
+
         # 当前插入歌曲显示
         self.current_song_var = tk.StringVar(value="")
         self.current_song_label = ttk.Label(
@@ -977,6 +1001,65 @@ class MainWindow:
         """点击停止按钮"""
         self.stop_event.set()
         self._log("正在停止...")
+
+    def _check_dll_status(self):
+        """检测 AwooMusicBot DLL 状态，更新注入按钮显示"""
+        from ..infrastructure.dll_injector import DllInjector
+
+        dll_path = DllInjector.find_dll()
+        pid = DllInjector.get_cloudmusic_pid()
+
+        if dll_path is None:
+            self.inject_status_var.set("未找到 DLL，请先安装嗷呜点歌机")
+            self.inject_btn.config(state="disabled")
+            self.inject_btn.config(text="注入静默通道")
+            return
+
+        if pid is None:
+            self.inject_status_var.set("网易云未运行")
+            self.inject_btn.config(state="disabled")
+            self.inject_btn.config(text="注入静默通道")
+            return
+
+        if DllInjector.is_injected(pid):
+            self.inject_status_var.set("静默通道已就绪")
+            self.inject_btn.config(state="disabled")
+            self.inject_btn.config(text="已注入")
+        else:
+            self.inject_status_var.set("检测到网易云运行中，可注入")
+            self.inject_btn.config(state="normal")
+            self.inject_btn.config(text="注入静默通道")
+
+    def _on_inject_dll(self):
+        """点击注入按钮"""
+        from ..infrastructure.dll_injector import DllInjector
+
+        dll_path = DllInjector.find_dll()
+        if dll_path is None:
+            messagebox.showerror("注入失败", "未找到 AwooNcmCefBridge.dll")
+            return
+
+        pid = DllInjector.get_cloudmusic_pid()
+        if pid is None:
+            messagebox.showerror("注入失败", "网易云音乐未运行，请先启动")
+            return
+
+        self.inject_btn.config(state="disabled")
+        self.inject_status_var.set("正在注入...")
+        self.root.update_idletasks()
+
+        success, error_msg = DllInjector.inject(pid, dll_path)
+
+        if success:
+            self.inject_status_var.set("静默通道已就绪")
+            self.inject_btn.config(text="已注入")
+            self._log("DLL 注入成功，静默插入模式已启用")
+            messagebox.showinfo("成功", "DLL 注入成功！\n现在可以静默插入歌曲，不会唤起网易云窗口。")
+        else:
+            self.inject_status_var.set("注入失败")
+            self.inject_btn.config(state="normal")
+            self._log(f"DLL 注入失败: {error_msg}")
+            messagebox.showerror("注入失败", f"DLL 注入失败：{error_msg}")
 
     def _run_task(self, playlist_id: str):
         """后台执行任务"""

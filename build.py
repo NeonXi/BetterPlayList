@@ -58,8 +58,13 @@ def build(debug: bool = False, pyarmor: bool = False):
     for imp in hidden_imports:
         cmd += ["--hidden-import", imp]
 
-    # 包含的数据文件（如有）
-    # cmd += ["--add-data", "data;data"]  # 暂不打包 data，运行时在 exe 同目录自动创建
+    # 包含的数据文件：将 AwooNcmCefBridge.dll 打包进 exe（静默注入用）
+    dll_path = os.path.join(PROJECT_DIR, "assets", "AwooNcmCefBridge.dll")
+    if os.path.exists(dll_path):
+        cmd += ["--add-binary", f"{dll_path};assets/"]
+        print(f"[打包] 包含 DLL: {dll_path}")
+    else:
+        print("[警告] 未找到 assets/AwooNcmCefBridge.dll，注入功能将不可用")
 
     cmd += [ENTRY_SCRIPT]
 

@@ -27,10 +27,12 @@ class AwooClient:
         try:
             result = subprocess.run(
                 ['tasklist', '/FI', 'IMAGENAME eq cloudmusic.exe', '/FO', 'CSV'],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True, timeout=5,
                 creationflags=CREATE_NO_WINDOW
             )
-            for line in result.stdout.split('\n')[1:]:
+            # Windows tasklist 输出为 GBK 编码
+            output = result.stdout.decode('gbk', errors='replace')
+            for line in output.split('\n')[1:]:
                 if line.strip():
                     parts = line.strip('"').split('","')
                     if len(parts) >= 2:
