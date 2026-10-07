@@ -41,12 +41,17 @@ class AwooClient:
 
     @staticmethod
     def is_available() -> bool:
-        """检查 AwooMusicBot 是否可用"""
+        """检查 AwooMusicBot 是否可用（直接尝试打开管道，比 os.path.exists 更可靠）"""
         pid = AwooClient._get_cloudmusic_pid()
         if pid is None:
             return False
         pipe_name = rf"{AwooClient.PIPE_PREFIX}-{pid}"
-        return os.path.exists(pipe_name)
+        try:
+            handle = os.open(pipe_name, os.O_RDWR)
+            os.close(handle)
+            return True
+        except OSError:
+            return False
 
     @staticmethod
     def _send_command(cmd: str, timeout: float = 2.0) -> str:

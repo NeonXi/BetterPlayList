@@ -60,10 +60,12 @@ class OrpheusInserter(QueueInserter):
             return True
 
         # 检测是否可用 AwooMusicBot（静默模式，不抢焦点）
-        use_awoo = AwooClient.is_available()
+        # 注意：插入过程中可能因网易云状态变化导致 Awoo 失效，
+        # 所以每首歌都重新检测，且失败时重试一次
 
         # AwooMusicBot 管道响应快，用短间隔；orpheus 协议需要较长间隔
-        actual_interval = 0.05 if use_awoo else 1.0
+        awoo_interval = 0.05
+        orpheus_interval = 1.0
 
         song_names = song_names or {}
         stop_event = stop_event or threading.Event()
@@ -74,14 +76,27 @@ class OrpheusInserter(QueueInserter):
             if stop_event.is_set():
                 return False
 
+            # 每次插入前重新检测 Awoo 是否可用
+            use_awoo = AwooClient.is_available()
+            inserted = False
+
             if use_awoo:
                 # 静默模式：通过 AwooMusicBot 管道直接执行，不唤起网易云窗口
-                AwooClient.add_next(song_id)
-            else:
-                # 回退模式：通过 orpheus:// 协议
-                cmd = dict(self.ADD_TO_NEXT_TEMPLATE)
-                cmd["value"] = song_id
-                OrpheusClient.send(cmd)
+                inserted = AwooClient.add_next(song_id)
+                if not inserted:
+                    # 失败后等一下重试一次
+                    time.sleep(0.15)
+                    inserted = AwooClient.add_next(song_id)
+
+            if not inserted:
+                if use_awoo:
+                    # Awoo 可用但插入失败，静默跳过（不唤起窗口）
+                    pass
+                else:
+                    # Awoo 不可用，回退到 orpheus:// 协议
+                    cmd = dict(self.ADD_TO_NEXT_TEMPLATE)
+                    cmd["value"] = song_id
+                    OrpheusClient.send(cmd)
 
             # 汇报当前插入的歌曲
             if current_song_callback:
@@ -93,13 +108,15 @@ class OrpheusInserter(QueueInserter):
                 progress_callback(index + 1, total)
 
             # 最后一首不需要等待
-            if index < total - 1 and actual_interval > 0:
-                # 用小步长 sleep，以便及时响应停止
-                end_time = time.time() + actual_interval
-                while time.time() < end_time:
-                    if stop_event.is_set():
-                        return False
-                    time.sleep(min(0.1, end_time - time.time()))
+            if index < total - 1:
+                actual_interval = awoo_interval if use_awoo else orpheus_interval
+                if actual_interval > 0:
+                    # 用小步长 sleep，以便及时响应停止
+                    end_time = time.time() + actual_interval
+                    while time.time() < end_time:
+                        if stop_event.is_set():
+                            return False
+                        time.sleep(min(0.1, end_time - time.time()))
 
         return True
 
