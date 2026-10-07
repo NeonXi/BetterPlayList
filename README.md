@@ -1,4 +1,4 @@
-# BetterPlayList
+# BetterPlayList v3.0
 
 网易云音乐智能随机播放工具 —— 打破官方"伪随机"的局限，让歌单真正随机起来。
 
@@ -74,9 +74,9 @@ Chrome DPAPI 解密 → AES-GCM 解密 → 提取 MUSIC_U 等关键 Cookie
 
 无需用户手动输入账号密码，实现"已骇入本地账户"的无感登录体验。
 
-### 2. 一键 DLL 注入（v2.0 新增）
+### 2. 一键 DLL 注入
 
-为了让用户**无需安装 AwooMusicBot** 也能使用静默插入，v2.0 内置了 DLL 注入功能：
+为了让用户**无需安装 AwooMusicBot** 也能使用静默插入，程序内置了 DLL 注入功能：
 
 **工作原理**：
 
@@ -160,7 +160,7 @@ BetterPlayList/
 ├── build.py                         # PyInstaller 打包脚本
 ├── requirements.txt                 # Python 依赖
 ├── assets/                          # 打包资源（不上传 Git）
-│   └── AwooNcmCefBridge.dll         # 静默插入 DLL（v2.0 捆绑）
+│   └── AwooNcmCefBridge.dll         # 静默插入 DLL（程序捆绑）
 ├── src/
 │   ├── application/                 # 应用层
 │   │   ├── dto.py                   # 数据传输对象
@@ -176,7 +176,7 @@ BetterPlayList/
 │   │   ├── ncm_api_client.py        # 网易云 API 客户端
 │   │   ├── ncm_local_cookie.py      # 本地 Cookie 读取
 │   │   ├── cached_playlist_fetcher.py  # 歌单缓存
-│   │   ├── dll_injector.py          # DLL 注入器（v2.0 新增）
+│   │   ├── dll_injector.py          # DLL 注入器
 │   │   ├── awoo_client.py           # AwooMusicBot 管道客户端
 │   │   ├── orpheus_client.py        # orpheus:// 协议客户端
 │   │   ├── orpheus_inserter.py      # 队列插入器
@@ -197,13 +197,13 @@ BetterPlayList/
 
 - Windows 10 / 11
 - 网易云音乐 PC 客户端（已登录）
-- **v2.0 起无需安装 AwooMusicBot**，程序内置 DLL 注入功能，一键启用静默插入
+- **无需安装 AwooMusicBot**，程序内置 DLL 注入功能，一键启用静默插入
 
 ### 运行方式
 
 **方式一：直接运行 exe（推荐）**
 
-下载 Release 中的 `BetterPlayList_v2.0.exe`，双击运行。
+下载 Release 中的 `BetterPlayList_v3.0.exe`，双击运行。
 
 **方式二：Python 源码运行**
 
@@ -216,7 +216,7 @@ python main.py
 
 ```bash
 python build.py
-# 生成 dist/BetterPlayList_v2.0.exe
+# 生成 dist/BetterPlayList_v3.0.exe
 ```
 
 ### 操作步骤
@@ -257,14 +257,14 @@ python build.py
 
 - 首次加载歌单后，完整数据以 JSON 形式缓存到 `data/playlists/` 目录
 - **二次加载直接从本地读取**，秒开，不再请求网络
-- 如需最新数据（如歌单内容已更新），勾选"**强制刷新歌单缓存**"
+- 如需最新数据（如歌单内容已更新），点击"**🔄 刷新此歌单**"按钮无视缓存重新抓取
 
 ### Q: 打包成单文件 exe 后，缓存文件在哪？
 
-打包后的 `BetterPlayList_v2.0.exe` 运行时，会在 **exe 同目录**自动创建 `data/` 文件夹：
+打包后的 `BetterPlayList_v3.0.exe` 运行时，会在 **exe 同目录**自动创建 `data/` 文件夹：
 
 ```
-BetterPlayList_v2.0.exe
+BetterPlayList_v3.0.exe
 ├── data/
 │   ├── history.json      # 播放历史
 │   └── playlists/        # 歌单缓存 JSON

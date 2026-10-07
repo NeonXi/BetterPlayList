@@ -298,54 +298,60 @@ class MainWindow:
         self.strategy_desc_label.grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=(0, 5))
         self._update_strategy_description("super")
 
-        # 去重窗口
-        ttk.Label(input_frame, text="近期跳过:").grid(row=3, column=0, sticky="w", pady=5)
+        # ---- 近期跳过 ----
+        skip_row = ttk.Frame(input_frame)
+        skip_row.grid(row=3, column=0, columnspan=3, sticky="w", pady=5)
+        ttk.Label(skip_row, text="近期跳过:").pack(side="left")
         self.window_var = tk.IntVar(value=20)
         ttk.Spinbox(
-            input_frame,
+            skip_row,
             from_=0,
             to=100,
             textvariable=self.window_var,
             width=8
-        ).grid(row=3, column=1, sticky="w", padx=5)
+        ).pack(side="left", padx=5)
         ttk.Label(
-            input_frame,
+            skip_row,
             text="（最近听过的N首歌排到最后，0=不考虑）",
             foreground=FG_SECONDARY,
             font=("Microsoft YaHei", 8)
-        ).grid(row=3, column=1, sticky="e", padx=5)
+        ).pack(side="left", padx=5)
 
-        # 强制刷新缓存
-        self.refresh_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            input_frame,
-            text="强制刷新歌单缓存",
-            variable=self.refresh_var
-        ).grid(row=4, column=0, sticky="w", pady=5)
+        # ---- 刷新此歌单 ----
+        refresh_row = ttk.Frame(input_frame)
+        refresh_row.grid(row=4, column=0, columnspan=3, sticky="w", pady=5)
+        ttk.Button(
+            refresh_row,
+            text="🔄 刷新此歌单",
+            command=self._on_force_refresh,
+            width=16
+        ).pack(side="left")
         ttk.Label(
-            input_frame,
-            text="（默认使用本地缓存，勾选则重新从网易云抓取）",
+            refresh_row,
+            text="（无视缓存，重新从网易云抓取最新数据）",
             foreground=FG_SECONDARY,
             font=("Microsoft YaHei", 8)
-        ).grid(row=4, column=1, sticky="w", padx=5)
+        ).pack(side="left", padx=5)
 
-        # 清空队列选项
+        # ---- 清空队列 ----
+        clear_row = ttk.Frame(input_frame)
+        clear_row.grid(row=5, column=0, columnspan=3, sticky="w", pady=5)
         self.clear_queue_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            input_frame,
+            clear_row,
             text="插入前清空播放队列",
             variable=self.clear_queue_var
-        ).grid(row=6, column=0, sticky="w", pady=5)
+        ).pack(side="left")
         ttk.Label(
-            input_frame,
+            clear_row,
             text="（勾选则先清空当前队列再插入）",
             foreground=FG_SECONDARY,
             font=("Microsoft YaHei", 8)
-        ).grid(row=6, column=1, sticky="w", padx=5)
+        ).pack(side="left", padx=5)
 
-        # 可配置分散算法的三个维度开关
+        # ---- 可配置分散算法的三个维度开关 ----
         self.spread_frame = ttk.Frame(input_frame)
-        self.spread_frame.grid(row=7, column=0, columnspan=2, sticky="w", pady=5)
+        self.spread_frame.grid(row=6, column=0, columnspan=3, sticky="w", pady=5)
 
         self.spread_popularity_var = tk.BooleanVar(value=True)
         self.spread_artist_var = tk.BooleanVar(value=True)
@@ -724,6 +730,39 @@ class MainWindow:
         if extracted:
             self._fetch_playlist_info_async(extracted)
 
+    def _on_force_refresh(self):
+        """点击"刷新此歌单"按钮：无视缓存，重新从网络抓取最新歌单"""
+        raw = self.playlist_id_var.get().strip()
+        if not raw:
+            messagebox.showwarning("提示", "请先输入歌单链接或ID，或加载一个歌单")
+            return
+        playlist_id = self._extract_playlist_id(raw)
+        if not playlist_id:
+            messagebox.showwarning("提示", "无法从输入中提取歌单ID")
+            return
+        self.playlist_id_var.set(playlist_id)
+        self._log(f"强制刷新歌单: {playlist_id}")
+
+        # 启动加载动画（使用独立 key，避免与"加载此歌单"冲突）
+        self.load_input_btn.config(state="disabled")
+        self._start_loading_anim(self.load_input_btn, "刷新中", "refresh")
+
+        self._force_refresh_async(playlist_id)
+
+    def _force_refresh_async(self, playlist_id: str):
+        """异步强制刷新歌单"""
+        self.playlist_info_var.set("正在强制刷新歌单...")
+        self.playlist_info_label.configure(foreground=FG_SECONDARY)
+
+        def task():
+            try:
+                playlist = self.service.fetcher.refresh(playlist_id)
+                self.root.after(0, lambda: self._on_fetch_success(playlist))
+            except Exception as e:
+                self.root.after(0, lambda: self._on_fetch_error(str(e)))
+
+        threading.Thread(target=task, daemon=True).start()
+
     def _fetch_playlist_info_async(self, playlist_id: str):
         """异步获取歌单信息并进入预览模式"""
         self.playlist_info_var.set("正在获取歌单信息...")
@@ -741,12 +780,14 @@ class MainWindow:
     def _on_fetch_success(self, playlist: Playlist):
         """歌单加载成功：停止动画、恢复按钮、进入预览"""
         self._stop_loading_anim("input")
+        self._stop_loading_anim("refresh")
         self.load_input_btn.config(state="normal", text="加载此歌单")
         self._enter_preview_mode(playlist)
 
     def _on_fetch_error(self, error_msg: str):
         """歌单加载失败：停止动画、恢复按钮、显示错误"""
         self._stop_loading_anim("input")
+        self._stop_loading_anim("refresh")
         self.load_input_btn.config(state="normal", text="加载此歌单")
         self._update_playlist_info_error()
         self._log(f"✗ 加载歌单失败: {error_msg}")
@@ -974,7 +1015,9 @@ class MainWindow:
         shuffler = ShuffleStrategyFactory.create(
             strategy, options if strategy == "configurable" else None
         )
-        self._preview_songs = shuffler.shuffle(self._preview_playlist.songs, [])
+        # 预览模式也考虑近期跳过，与实际执行结果保持一致
+        recent_ids = self.service.history.get_recent(self.window_var.get())
+        self._preview_songs = shuffler.shuffle(self._preview_playlist.songs, recent_ids)
         self._render_preview_tree()
 
     def _render_preview_tree(self):
@@ -1048,11 +1091,10 @@ class MainWindow:
                 "无法识别的输入。请输入纯数字歌单 ID，或粘贴网易云歌单分享链接。"
             )
             return
-        # 如果提取出的 ID 与原始输入不同，更新输入框显示
+        # 兜底：确保显示歌单信息（用户可能直接粘贴链接后点执行）
+        # 注意：这里只更新输入框显示，不重复调用网络请求
         if playlist_id != raw_input:
             self.playlist_id_var.set(playlist_id)
-        # 兜底：确保显示歌单信息（用户可能直接粘贴链接后点执行）
-        self._fetch_playlist_info_async(playlist_id)
 
         # 禁用按钮，启用停止按钮，防止重复点击
         self.run_btn.configure(state="disabled")
@@ -1154,7 +1196,7 @@ class MainWindow:
                 playlist_id=playlist_id,
                 strategy=self._strategy_key_by_display[self.strategy_var.get()],
                 dedupe_window=self.window_var.get(),
-                force_refresh=self.refresh_var.get(),
+                force_refresh=False,
                 clear_queue=self.clear_queue_var.get(),
                 spread_popularity=self.spread_popularity_var.get(),
                 spread_artist=self.spread_artist_var.get(),
