@@ -26,31 +26,13 @@ class CachedPlaylistFetcher(PlaylistFetcher):
     def fetch(self, playlist_id: str) -> Playlist:
         """
         获取歌单：优先读缓存，没有则抓取并缓存
-        缓存命中时仍会补充最新的本账号播放次数（动态数据，不随缓存固化）
+        缓存命中时直接返回（播放次数不随缓存固化，如需最新数据请勾选"强制刷新"）
         """
         if self.has_cache(playlist_id):
-            playlist = self._load_cache(playlist_id)
-            return self._fill_play_counts(playlist)
+            return self._load_cache(playlist_id)
         # 无缓存，抓取并保存
         playlist = self.fetcher.fetch(playlist_id)
         self._save_cache(playlist)
-        return playlist
-
-    def _fill_play_counts(self, playlist: Playlist) -> Playlist:
-        """用最新的播放次数映射补充缓存歌单中的歌曲"""
-        # 底层抓取器支持播放次数查询才补充
-        fetch_counts = getattr(self.fetcher, "_fetch_play_counts", None)
-        if not callable(fetch_counts):
-            return playlist
-        play_count_map = fetch_counts()
-        if not play_count_map:
-            return playlist
-
-        from dataclasses import replace
-        playlist.songs = [
-            replace(s, play_count=play_count_map.get(s.id, -1))
-            for s in playlist.songs
-        ]
         return playlist
 
     def refresh(self, playlist_id: str) -> Playlist:

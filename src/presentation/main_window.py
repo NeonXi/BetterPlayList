@@ -39,6 +39,8 @@ class MainWindow:
         self.root.minsize(820, 620)
         self.root.resizable(True, True)
         self._panel_expanded = False  # 右侧面板是否展开
+        self._injecting = False        # 是否正在执行注入（轮询期间暂停更新）
+        self._loading_anim_jobs = {}   # 按钮动画 after 任务
 
         # 预览面板状态
         self._preview_playlist: Playlist | None = None  # 当前预览的完整歌单
@@ -205,6 +207,16 @@ class MainWindow:
         )
         self.user_info_label.pack(pady=(0, 15))
 
+        # 加载我的歌单（主操作按钮，置于首位）
+        self.load_playlists_btn = ttk.Button(
+            self.left_panel,
+            text="加载我的歌单",
+            command=self._on_load_playlists,
+            width=20,
+            style="Accent.TButton"
+        )
+        self.load_playlists_btn.pack(pady=(0, 12))
+
         # 输入区
         input_frame = ttk.LabelFrame(self.left_panel, text="参数设置", padding=10)
         input_frame.pack(fill="x", padx=20, pady=(0, 10))
@@ -213,8 +225,10 @@ class MainWindow:
         ttk.Label(input_frame, text="歌单 ID / 链接:").grid(row=0, column=0, sticky="w", pady=5)
 
         # 输入框 + 歌单信息标签（上下排列）
+        # column 1 可水平扩展，歌单名过长时换行而非挤出按钮
+        input_frame.columnconfigure(1, weight=1)
         id_container = ttk.Frame(input_frame)
-        id_container.grid(row=0, column=1, sticky="w", padx=5, pady=5)
+        id_container.grid(row=0, column=1, sticky="ew", padx=5, pady=5)
 
         self.playlist_id_var = tk.StringVar()
         id_entry = ttk.Entry(
@@ -227,32 +241,28 @@ class MainWindow:
         id_entry.bind("<FocusOut>", self._on_id_entry_blur)
         id_entry.bind("<Return>", self._on_id_entry_blur)
 
-        # 歌单信息显示标签（名称 + 歌曲数）
+        # 歌单信息 + 加载此歌单（底部并排）
+        id_bottom = ttk.Frame(id_container)
+        id_bottom.pack(side="top", fill="x", pady=(2, 0))
+
         self.playlist_info_var = tk.StringVar(value="")
         self.playlist_info_label = ttk.Label(
-            id_container,
+            id_bottom,
             textvariable=self.playlist_info_var,
             foreground=SUCCESS,
-            font=("Microsoft YaHei", 8)
+            font=("Microsoft YaHei", 8),
+            wraplength=250,
+            justify="left"
         )
-        self.playlist_info_label.pack(side="top", anchor="w", pady=(2, 0))
+        self.playlist_info_label.pack(side="left")
 
-        # 按钮区
-        btn_frame = ttk.Frame(input_frame)
-        btn_frame.grid(row=0, column=2, sticky="e", padx=5, pady=5)
-        ttk.Button(
-            btn_frame,
+        self.load_input_btn = ttk.Button(
+            id_bottom,
             text="加载此歌单",
             command=self._on_load_input_playlist,
             width=10
-        ).pack(side="left", padx=(0, 5))
-        self.load_playlists_btn = ttk.Button(
-            btn_frame,
-            text="加载我的歌单",
-            command=self._on_load_playlists,
-            width=10
         )
-        self.load_playlists_btn.pack(side="left")
+        self.load_input_btn.pack(side="right")
 
         # 算法选择
         ttk.Label(input_frame, text="随机算法:").grid(row=1, column=0, sticky="w", pady=5)
@@ -477,7 +487,8 @@ class MainWindow:
             selectbackground=ACCENT,
             selectforeground="white",
             borderwidth=0,
-            state="disabled"
+            state="disabled",
+            wrap="none"  # 关闭自动换行：避免窗口拖拽时全文重排导致卡顿
         )
         self.log_text.pack(fill="both", expand=True, pady=(0, 5))
 
@@ -662,6 +673,25 @@ class MainWindow:
 
         threading.Thread(target=task, daemon=True).start()
 
+    def _start_loading_anim(self, btn: ttk.Button, base_text: str, key: str):
+        """启动按钮加载动画（文字循环: 加载中. → 加载中.. → 加载中...）"""
+        self._stop_loading_anim(key)
+        dots = [".", "..", "..."]
+        idx = [0]  # 用列表实现闭包内可变状态
+
+        def step():
+            btn.config(text=f"{base_text}{dots[idx[0]]}")
+            idx[0] = (idx[0] + 1) % len(dots)
+            self._loading_anim_jobs[key] = self.root.after(400, step)
+
+        step()
+
+    def _stop_loading_anim(self, key: str, restore_text: str = None):
+        """停止按钮加载动画"""
+        job = self._loading_anim_jobs.pop(key, None)
+        if job is not None:
+            self.root.after_cancel(job)
+
     def _on_load_input_playlist(self):
         """点击"加载此歌单"按钮，加载输入框中的歌单"""
         raw = self.playlist_id_var.get().strip()
@@ -674,6 +704,11 @@ class MainWindow:
             return
         self.playlist_id_var.set(playlist_id)
         self._log(f"手动加载歌单: {playlist_id}")
+
+        # 启动加载动画
+        self.load_input_btn.config(state="disabled")
+        self._start_loading_anim(self.load_input_btn, "加载中", "input")
+
         self._fetch_playlist_info_async(playlist_id)
 
     def _on_id_entry_blur(self, event=None):
@@ -697,12 +732,24 @@ class MainWindow:
         def task():
             try:
                 playlist = self.service.fetcher.fetch(playlist_id)
-                self.root.after(0, lambda: self._enter_preview_mode(playlist))
+                self.root.after(0, lambda: self._on_fetch_success(playlist))
             except Exception as e:
-                self.root.after(0, lambda: self._update_playlist_info_error())
-                self.root.after(0, lambda: self._log(f"✗ 加载歌单失败: {e}"))
+                self.root.after(0, lambda: self._on_fetch_error(str(e)))
 
         threading.Thread(target=task, daemon=True).start()
+
+    def _on_fetch_success(self, playlist: Playlist):
+        """歌单加载成功：停止动画、恢复按钮、进入预览"""
+        self._stop_loading_anim("input")
+        self.load_input_btn.config(state="normal", text="加载此歌单")
+        self._enter_preview_mode(playlist)
+
+    def _on_fetch_error(self, error_msg: str):
+        """歌单加载失败：停止动画、恢复按钮、显示错误"""
+        self._stop_loading_anim("input")
+        self.load_input_btn.config(state="normal", text="加载此歌单")
+        self._update_playlist_info_error()
+        self._log(f"✗ 加载歌单失败: {error_msg}")
 
     def _update_playlist_info(self, name: str, count: int):
         """更新歌单信息显示"""
@@ -786,6 +833,9 @@ class MainWindow:
         self.load_playlists_btn.configure(state="disabled")
         self._log("正在读取本地网易云登录态并获取歌单...")
 
+        # 启动加载动画
+        self._start_loading_anim(self.load_playlists_btn, "加载中", "my")
+
         thread = threading.Thread(target=self._load_playlists_task, daemon=True)
         thread.start()
 
@@ -807,6 +857,10 @@ class MainWindow:
 
     def _on_playlist_load_error(self, error_msg: str):
         """歌单加载失败"""
+        # 停止加载动画，恢复按钮
+        self._stop_loading_anim("my")
+        self.load_playlists_btn.configure(state="normal", text="加载我的歌单")
+
         # 输出到控制台（CMD）
         print(f"[ERROR] 加载歌单失败: {error_msg}", flush=True)
         self._log(f"✗ 加载歌单失败: {error_msg}")
@@ -831,9 +885,16 @@ class MainWindow:
 
     def _show_playlist_selector(self, playlists: list[PlaylistSummary]):
         """将歌单填充到右侧面板并展开"""
+        # 停止加载动画，恢复按钮文字
+        self._stop_loading_anim("my")
+        self.load_playlists_btn.configure(state="normal", text="加载我的歌单")
+
         self.user_playlists = playlists
-        self.load_playlists_btn.configure(state="normal")
         self._log(f"✓ 加载到 {len(playlists)} 个歌单")
+
+        # 如果当前在预览模式，先切回歌单列表
+        if self._right_mode == "preview":
+            self._exit_preview_mode()
 
         # 清空并填充歌单列表
         self.playlist_search_var.set("")
@@ -867,6 +928,10 @@ class MainWindow:
 
     def _enter_preview_mode(self, playlist: Playlist):
         """进入歌曲预览模式"""
+        # 确保右侧面板展开
+        if not self._panel_expanded:
+            self._expand_right_panel()
+
         self._preview_playlist = playlist
         self.preview_title_var.set(f"随机处理结果预览 - {playlist.name}")
 
@@ -874,6 +939,9 @@ class MainWindow:
         self.playlist_list_frame.pack_forget()
         self.song_preview_frame.pack(fill="both", expand=True)
         self._right_mode = "preview"
+
+        # 更新歌单信息标签
+        self._update_playlist_info(playlist.name, playlist.total)
 
         # 初始重排
         self._refresh_preview_shuffle()
@@ -1003,32 +1071,40 @@ class MainWindow:
         self._log("正在停止...")
 
     def _check_dll_status(self):
-        """检测 AwooMusicBot DLL 状态，更新注入按钮显示"""
-        from ..infrastructure.dll_injector import DllInjector
+        """后台线程检测 DLL 状态（tasklist/进程枚举较慢，避免阻塞 UI），并周期性轮询"""
+        def task():
+            from ..infrastructure.dll_injector import DllInjector
+            dll_found = DllInjector.find_dll() is not None
+            pid = DllInjector.get_cloudmusic_pid()
+            injected = bool(pid and dll_found and DllInjector.is_injected(pid))
+            try:
+                self.root.after(0, lambda: self._update_inject_ui(dll_found, pid is not None, injected))
+            except Exception:
+                pass  # 窗口已关闭
 
-        dll_path = DllInjector.find_dll()
-        pid = DllInjector.get_cloudmusic_pid()
+        threading.Thread(target=task, daemon=True).start()
 
-        if dll_path is None:
-            self.inject_status_var.set("未找到 DLL，请先安装嗷呜点歌机")
-            self.inject_btn.config(state="disabled")
-            self.inject_btn.config(text="注入静默通道")
-            return
+    def _update_inject_ui(self, dll_found: bool, ncm_running: bool, injected: bool):
+        """在主线程更新注入按钮状态，并安排下一次轮询"""
+        if not self._injecting:
+            if not dll_found:
+                self.inject_status_var.set("未找到 DLL")
+                self.inject_btn.config(state="disabled", text="注入静默通道")
+            elif not ncm_running:
+                self.inject_status_var.set("网易云未运行")
+                self.inject_btn.config(state="disabled", text="注入静默通道")
+            elif injected:
+                self.inject_status_var.set("静默通道已就绪")
+                self.inject_btn.config(state="disabled", text="已注入")
+            else:
+                self.inject_status_var.set("检测到网易云运行中，可注入")
+                self.inject_btn.config(state="normal", text="注入静默通道")
 
-        if pid is None:
-            self.inject_status_var.set("网易云未运行")
-            self.inject_btn.config(state="disabled")
-            self.inject_btn.config(text="注入静默通道")
-            return
-
-        if DllInjector.is_injected(pid):
-            self.inject_status_var.set("静默通道已就绪")
-            self.inject_btn.config(state="disabled")
-            self.inject_btn.config(text="已注入")
-        else:
-            self.inject_status_var.set("检测到网易云运行中，可注入")
-            self.inject_btn.config(state="normal")
-            self.inject_btn.config(text="注入静默通道")
+        # 3 秒后再次轮询（网易云启动/关闭时自动刷新状态）
+        try:
+            self.root.after(3000, self._check_dll_status)
+        except Exception:
+            pass  # 窗口已关闭
 
     def _on_inject_dll(self):
         """点击注入按钮"""
@@ -1044,11 +1120,13 @@ class MainWindow:
             messagebox.showerror("注入失败", "网易云音乐未运行，请先启动")
             return
 
+        self._injecting = True
         self.inject_btn.config(state="disabled")
         self.inject_status_var.set("正在注入...")
         self.root.update_idletasks()
 
         success, error_msg = DllInjector.inject(pid, dll_path)
+        self._injecting = False
 
         if success:
             self.inject_status_var.set("静默通道已就绪")
