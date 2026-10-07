@@ -259,6 +259,23 @@ python build.py
 - **二次加载直接从本地读取**，秒开，不再请求网络
 - 如需最新数据（如歌单内容已更新），勾选"**强制刷新歌单缓存**"
 
+### Q: 打包成单文件 exe 后，缓存文件在哪？
+
+打包后的 `BetterPlayList_v2.0.exe` 运行时，会在 **exe 同目录**自动创建 `data/` 文件夹：
+
+```
+BetterPlayList_v2.0.exe
+├── data/
+│   ├── history.json      # 播放历史
+│   └── playlists/        # 歌单缓存 JSON
+│       ├── 123456.json
+│       └── 789012.json
+```
+
+- `assets/`（含 DLL）打包在 exe 内部，启动时自动解压
+- `data/` 是运行时创建的外部文件夹，**不会被打包进 exe**
+- 歌单缓存和播放历史永久保留，重启程序后仍在
+
 ## 致谢
 
 - **[AwooMusicBot](https://github.com/MikkoAbudo/AwooMusicBot)**（嗷呜点歌机）— 本项目最核心的静默插入功能深受其启发。`AwooNcmCefBridge.dll` 来自该项目，感谢作者开源了如此优雅的 DLL 注入 + 命名管道通信方案
