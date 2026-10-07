@@ -669,13 +669,17 @@ class MainWindow:
                 break
         self._log(f"已选择歌单: {playlist_id}，正在加载歌曲列表...")
 
+        # 启动加载动画，给用户即时反馈
+        self.load_input_btn.config(state="disabled")
+        self._start_loading_anim(self.load_input_btn, "加载中", "input")
+
         # 异步获取完整歌单并进入预览模式
         def task():
             try:
                 playlist = self.service.fetcher.fetch(playlist_id)
-                self.root.after(0, lambda: self._enter_preview_mode(playlist))
+                self.root.after(0, lambda: self._on_fetch_success(playlist))
             except Exception as e:
-                self.root.after(0, lambda: self._log(f"✗ 加载歌曲列表失败: {e}"))
+                self.root.after(0, lambda: self._on_fetch_error(str(e)))
 
         threading.Thread(target=task, daemon=True).start()
 
