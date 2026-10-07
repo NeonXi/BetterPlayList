@@ -23,23 +23,25 @@ class CachedPlaylistFetcher(PlaylistFetcher):
         self.cache_dir = cache_dir
         os.makedirs(self.cache_dir, exist_ok=True)
 
-    def fetch(self, playlist_id: str) -> Playlist:
+    def fetch(self, playlist_id: str, progress_callback=None) -> Playlist:
         """
         获取歌单：优先读缓存，没有则抓取并缓存
-        缓存命中时直接返回（播放次数不随缓存固化，如需最新数据请勾选"强制刷新"）
+        缓存命中时直接返回（播放次数不随缓存固化，如需最新数据请点击"刷新此歌单"）
+        :param progress_callback: 进度回调 callback(current, total, partial_songs)，仅无缓存时生效
         """
         if self.has_cache(playlist_id):
             return self._load_cache(playlist_id)
-        # 无缓存，抓取并保存
-        playlist = self.fetcher.fetch(playlist_id)
+        # 无缓存，抓取并保存（支持流式进度）
+        playlist = self.fetcher.fetch(playlist_id, progress_callback)
         self._save_cache(playlist)
         return playlist
 
-    def refresh(self, playlist_id: str) -> Playlist:
+    def refresh(self, playlist_id: str, progress_callback=None) -> Playlist:
         """
         强制刷新：重新抓取并覆盖缓存
+        :param progress_callback: 进度回调 callback(current, total, partial_songs)，透传给底层 fetcher
         """
-        playlist = self.fetcher.fetch(playlist_id)
+        playlist = self.fetcher.fetch(playlist_id, progress_callback)
         self._save_cache(playlist)
         return playlist
 

@@ -1,5 +1,5 @@
 """
-BetterPlayList 打包脚本 v3.0
+BetterPlayList 打包脚本 v4.0
 用法：
     python build.py              # 打包成单文件 exe
     python build.py --debug      # 打包时保留控制台窗口（便于调试）
@@ -17,7 +17,7 @@ ENTRY_SCRIPT = os.path.join(PROJECT_DIR, "main.py")
 DIST_DIR = os.path.join(PROJECT_DIR, "dist")
 BUILD_DIR = os.path.join(PROJECT_DIR, "build")
 SPEC_FILE = os.path.join(PROJECT_DIR, "BetterPlayList.spec")
-EXE_NAME = "BetterPlayList_v3.0"
+EXE_NAME = "BetterPlayList_v4.0"
 
 
 def clean():
@@ -130,7 +130,7 @@ def main():
     else:
         build(debug=args.debug)
 
-    print("\n[完成] 可在 dist/ 目录找到 BetterPlayList_v3.0.exe")
+    print("\n[完成] 可在 dist/ 目录找到 BetterPlayList_v4.0.exe")
     print("[完成] 将 exe 拷贝到目标电脑即可运行，无需安装 Python")
 
 

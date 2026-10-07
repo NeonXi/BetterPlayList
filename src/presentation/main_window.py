@@ -41,6 +41,7 @@ class MainWindow:
         self._panel_expanded = False  # 右侧面板是否展开
         self._injecting = False        # 是否正在执行注入（轮询期间暂停更新）
         self._loading_anim_jobs = {}   # 按钮动画 after 任务
+        self._is_loading = False       # 是否正在加载歌单（流式加载期间）
 
         # 预览面板状态
         self._preview_playlist: Playlist | None = None  # 当前预览的完整歌单
@@ -598,18 +599,20 @@ class MainWindow:
 
         self.preview_tree = ttk.Treeview(
             pv_list_frame,
-            columns=("name", "popularity", "artist", "era", "played"),
+            columns=("seq", "name", "popularity", "artist", "era", "played"),
             show="headings",
             selectmode="browse"
         )
+        self.preview_tree.heading("seq", text="#")
         self.preview_tree.heading("name", text="歌名")
         self.preview_tree.heading("popularity", text="热度")
         self.preview_tree.heading("artist", text="歌手")
         self.preview_tree.heading("era", text="年代")
         self.preview_tree.heading("played", text="听过")
-        self.preview_tree.column("name", width=180)
+        self.preview_tree.column("seq", width=40, anchor="center")
+        self.preview_tree.column("name", width=160)
         self.preview_tree.column("popularity", width=50, anchor="center")
-        self.preview_tree.column("artist", width=120)
+        self.preview_tree.column("artist", width=110)
         self.preview_tree.column("era", width=60, anchor="center")
         self.preview_tree.column("played", width=60, anchor="center")
 
@@ -672,11 +675,22 @@ class MainWindow:
         # 启动加载动画，给用户即时反馈
         self.load_input_btn.config(state="disabled")
         self._start_loading_anim(self.load_input_btn, "加载中", "input")
+        self._is_loading = True
+        self.run_btn.configure(state="disabled")  # 加载期间禁用写入按钮
 
-        # 异步获取完整歌单并进入预览模式
+        # 异步获取完整歌单并进入预览模式（支持流式进度 + 实时刷新列表）
+        def progress_callback(current: int, total: int, partial_songs: list, playlist_name: str = ""):
+            pct = int(current / total * 100) if total > 0 else 0
+            self.root.after(0, lambda: self.playlist_info_var.set(
+                f"正在加载歌曲详情... {current}/{total} ({pct}%)"
+            ))
+            # 实时更新预览列表
+            if partial_songs:
+                self.root.after(0, lambda s=partial_songs, n=playlist_name: self._update_preview_songs(s, n))
+
         def task():
             try:
-                playlist = self.service.fetcher.fetch(playlist_id)
+                playlist = self.service.fetcher.fetch(playlist_id, progress_callback)
                 self.root.after(0, lambda: self._on_fetch_success(playlist))
             except Exception as e:
                 self.root.after(0, lambda: self._on_fetch_error(str(e)))
@@ -754,13 +768,24 @@ class MainWindow:
         self._force_refresh_async(playlist_id)
 
     def _force_refresh_async(self, playlist_id: str):
-        """异步强制刷新歌单"""
+        """异步强制刷新歌单（支持流式加载进度显示 + 实时刷新列表）"""
         self.playlist_info_var.set("正在强制刷新歌单...")
         self.playlist_info_label.configure(foreground=FG_SECONDARY)
+        self._is_loading = True
+        self.run_btn.configure(state="disabled")  # 加载期间禁用写入按钮
+
+        def progress_callback(current: int, total: int, partial_songs: list, playlist_name: str = ""):
+            pct = int(current / total * 100) if total > 0 else 0
+            self.root.after(0, lambda: self.playlist_info_var.set(
+                f"正在刷新歌曲详情... {current}/{total} ({pct}%)"
+            ))
+            # 实时更新预览列表
+            if partial_songs:
+                self.root.after(0, lambda s=partial_songs, n=playlist_name: self._update_preview_songs(s, n))
 
         def task():
             try:
-                playlist = self.service.fetcher.refresh(playlist_id)
+                playlist = self.service.fetcher.refresh(playlist_id, progress_callback)
                 self.root.after(0, lambda: self._on_fetch_success(playlist))
             except Exception as e:
                 self.root.after(0, lambda: self._on_fetch_error(str(e)))
@@ -768,13 +793,30 @@ class MainWindow:
         threading.Thread(target=task, daemon=True).start()
 
     def _fetch_playlist_info_async(self, playlist_id: str):
-        """异步获取歌单信息并进入预览模式"""
+        """异步获取歌单信息并进入预览模式（支持流式加载进度显示 + 实时刷新列表）"""
         self.playlist_info_var.set("正在获取歌单信息...")
         self.playlist_info_label.configure(foreground=FG_SECONDARY)
+        self._is_loading = True
+        self.run_btn.configure(state="disabled")  # 加载期间禁用写入按钮
+
+        def progress_callback(current: int, total: int, partial_songs: list, playlist_name: str = ""):
+            """流式进度回调：在主线程更新进度标签并实时刷新预览列表"""
+            pct = int(current / total * 100) if total > 0 else 0
+            self.root.after(0, lambda: self.playlist_info_var.set(
+                f"正在加载歌曲详情... {current}/{total} ({pct}%)"
+            ))
+            # 实时更新预览列表（使用当前已加载的歌曲）
+            if partial_songs:
+                self.root.after(0, lambda s=partial_songs, n=playlist_name: self._update_preview_songs(s, n))
+            # 每 200 首记录一次日志
+            if current % 200 == 0:
+                self.root.after(0, lambda c=current, t=total:
+                    self._log(f"加载进度: {c}/{t} ({int(c/t*100) if t > 0 else 0}%)")
+                )
 
         def task():
             try:
-                playlist = self.service.fetcher.fetch(playlist_id)
+                playlist = self.service.fetcher.fetch(playlist_id, progress_callback)
                 self.root.after(0, lambda: self._on_fetch_success(playlist))
             except Exception as e:
                 self.root.after(0, lambda: self._on_fetch_error(str(e)))
@@ -786,6 +828,8 @@ class MainWindow:
         self._stop_loading_anim("input")
         self._stop_loading_anim("refresh")
         self.load_input_btn.config(state="normal", text="加载此歌单")
+        self._is_loading = False
+        self.run_btn.configure(state="normal")  # 恢复写入按钮
         self._enter_preview_mode(playlist)
 
     def _on_fetch_error(self, error_msg: str):
@@ -793,6 +837,8 @@ class MainWindow:
         self._stop_loading_anim("input")
         self._stop_loading_anim("refresh")
         self.load_input_btn.config(state="normal", text="加载此歌单")
+        self._is_loading = False
+        self.run_btn.configure(state="normal")  # 恢复写入按钮
         self._update_playlist_info_error()
         self._log(f"✗ 加载歌单失败: {error_msg}")
 
@@ -971,6 +1017,34 @@ class MainWindow:
         else:
             self.spread_frame.grid_remove()
 
+    def _update_preview_songs(self, songs: list, playlist_name: str = ""):
+        """流式加载期间实时更新预览歌曲列表"""
+        # 首次进入预览模式：展开面板、切换显示
+        if self._right_mode != "preview":
+            if not self._panel_expanded:
+                self._expand_right_panel()
+            self.playlist_list_frame.pack_forget()
+            self.song_preview_frame.pack(fill="both", expand=True)
+            self._right_mode = "preview"
+            # 创建临时的 preview_playlist 对象
+            if not self._preview_playlist:
+                self._preview_playlist = Playlist(
+                    id="",
+                    name=playlist_name,
+                    cover_url="",
+                    songs=[]
+                )
+
+        if not self._preview_playlist:
+            return
+
+        # 更新预览播放列表的歌曲
+        self._preview_playlist.songs = songs
+        self._preview_songs = songs
+        self._render_preview_tree()
+        # 更新标题中的数量
+        self.preview_title_var.set(f"随机处理结果预览 - {self._preview_playlist.name} ({len(songs)}首)")
+
     def _enter_preview_mode(self, playlist: Playlist):
         """进入歌曲预览模式"""
         # 确保右侧面板展开
@@ -1039,9 +1113,10 @@ class MainWindow:
             "2010s": "2010s", "2020s": "2020s", "unknown": "未知"
         }
 
-        for song in songs:
+        for i, song in enumerate(songs, 1):
             play_count_str = str(song.play_count) if song.play_count >= 0 else "-"
             self.preview_tree.insert("", "end", values=(
+                i,
                 song.name,
                 POPULARITY_MAP.get(song.popularity_bucket, song.popularity_bucket),
                 song.artist,
@@ -1083,6 +1158,10 @@ class MainWindow:
 
     def _on_run(self):
         """点击执行按钮"""
+        # 流式加载期间不允许执行
+        if self._is_loading:
+            messagebox.showwarning("提示", "歌单正在加载中，请等待加载完成")
+            return
         raw_input = self.playlist_id_var.get().strip()
         if not raw_input:
             messagebox.showwarning("提示", "请输入歌单 ID 或粘贴分享链接")

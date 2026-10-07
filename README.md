@@ -1,4 +1,4 @@
-# BetterPlayList v3.0
+# BetterPlayList v4.0
 
 网易云音乐智能随机播放工具 —— 打破官方"伪随机"的局限，让歌单真正随机起来。
 
@@ -34,13 +34,15 @@ BetterPlayList 通过**自定义随机算法 + 静默队列插入**解决这些�
 - 歌单列表搜索、预览
 - 歌单 JSON 缓存，二次加载秒开（缓存命中时不请求网络）
 - 支持手动输入分享链接 / 歌单 ID
+- **支持超大歌单**（突破 1000 首限制，实测 3800+ 首完整加载）
 - 加载时按钮动态显示"加载中..."，避免误以为卡顿
 
 ### 👁️ 实时预览
 
 - 选中歌单后实时展示随机处理结果
 - 切换算法、调整参数时**实时重新排列**
-- 预览列：歌名、热度、歌手、年代、听过次数
+- 预览列：序号、歌名、热度、歌手、年代、听过次数
+- **流式加载**：大歌单加载过程中实时刷新列表，边下边看
 - 双击歌曲直接添加到"下一首播放"
 
 ### 📝 播放历史
@@ -139,7 +141,20 @@ ShellExecuteW(None, "open", url, None, None, SW_HIDE)
 
 配合 `SW_HIDE` 参数和焦点归还机制，最大程度减少窗口干扰。
 
-### 5. 可配置分散随机算法
+### 5. 超大歌单流式加载
+
+网易云 `/api/v3/playlist/detail` 接口返回的 `trackIds` 上限为 1000 个。当歌单超过 1000 首时，自动通过分页接口 `/api/playlist/track/all` 补充获取剩余歌曲 ID：
+
+```
+获取歌单详情 → 检测 trackCount > 1000 → 分页获取剩余 trackIds → 分批获取歌曲详情
+```
+
+同时，歌曲详情获取采用**流式加载**：
+- 每获取 200 首歌曲详情，立即回调 UI 线程
+- 右侧预览列表实时追加显示，无需等待全部加载完成
+- 标题实时更新当前已加载数量：`随机处理结果预览 - 歌单名 (200首) → (400首) → ...`
+
+### 6. 可配置分散随机算法
 
 在 Fisher-Yates 公平洗牌基础上，引入**冲突最小化贪心算法**：
 
@@ -203,7 +218,7 @@ BetterPlayList/
 
 **方式一：直接运行 exe（推荐）**
 
-下载 Release 中的 `BetterPlayList_v3.0.exe`，双击运行。
+下载 Release 中的 `BetterPlayList_v4.0.exe`，双击运行。
 
 **方式二：Python 源码运行**
 
@@ -216,7 +231,7 @@ python main.py
 
 ```bash
 python build.py
-# 生成 dist/BetterPlayList_v3.0.exe
+# 生成 dist/BetterPlayList_v4.0.exe
 ```
 
 ### 操作步骤
@@ -261,10 +276,10 @@ python build.py
 
 ### Q: 打包成单文件 exe 后，缓存文件在哪？
 
-打包后的 `BetterPlayList_v3.0.exe` 运行时，会在 **exe 同目录**自动创建 `data/` 文件夹：
+打包后的 `BetterPlayList_v4.0.exe` 运行时，会在 **exe 同目录**自动创建 `data/` 文件夹：
 
 ```
-BetterPlayList_v3.0.exe
+BetterPlayList_v4.0.exe
 ├── data/
 │   ├── history.json      # 播放历史
 │   └── playlists/        # 歌单缓存 JSON

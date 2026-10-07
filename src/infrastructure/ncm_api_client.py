@@ -9,7 +9,7 @@ from ..domain.models import Song, Playlist
 
 
 # 网易云 API 接口
-PLAYLIST_DETAIL_URL = "https://music.163.com/api/playlist/detail"
+PLAYLIST_DETAIL_URL = "https://music.163.com/api/v3/playlist/detail"
 SONG_DETAIL_URL = "https://music.163.com/api/v3/song/detail"
 USER_ACCOUNT_URL = "https://music.163.com/api/nuser/account/get"
 USER_PLAYLIST_URL = "https://music.163.com/api/user/playlist"
@@ -137,8 +137,12 @@ class NcmApiClient(PlaylistFetcher):
         track_count = playlist_info.get("trackCount", 0)
         return name, track_count
 
-    def fetch(self, playlist_id: str) -> Playlist:
-        """抓取歌单全部歌曲"""
+    def fetch(self, playlist_id: str, progress_callback=None) -> Playlist:
+        """
+        抓取歌单全部歌曲
+        :param playlist_id: 歌单ID
+        :param progress_callback: 进度回调 callback(current, total, partial_songs, playlist_name)，每批歌曲详情完成后调用
+        """
         # 1. 获取歌单详情
         playlist_info = self._fetch_playlist_detail(playlist_id)
         track_count = playlist_info.get("trackCount", 0)
@@ -152,16 +156,31 @@ class NcmApiClient(PlaylistFetcher):
             )
 
         # 2. 获取歌曲列表
-        #    统一通过歌曲详情接口获取完整信息（歌手、时长、热度等）
+        #    trackIds 上限 1000，如被截断则通过分页接口补充剩余歌曲
         track_ids = [t["id"] for t in playlist_info.get("trackIds", [])]
         if not track_ids:
             # 没有 trackIds（如榜单歌单），从 tracks 中提取
             track_ids = [t["id"] for t in playlist_info.get("tracks", [])]
 
+        # 检查是否被 1000 首上限截断
+        if track_count > len(track_ids) and track_count > 0:
+            print(f"[DEBUG] 歌单被截断: trackCount={track_count}, trackIds={len(track_ids)}, 开始分页获取剩余歌曲...")
+            remaining = self._fetch_remaining_tracks(playlist_id, len(track_ids), track_count)
+            print(f"[DEBUG] 分页获取完成: 剩余 {len(remaining)} 首，总计 {len(track_ids)} 首")
+            track_ids.extend(remaining)
+
+        playlist_name = playlist_info.get('name', '未知歌单')
+        cover_url = playlist_info.get('coverImgUrl', '')
+
         if not track_ids:
             all_tracks = playlist_info.get("tracks", [])
         else:
-            all_tracks = self._fetch_song_details(track_ids)
+            all_tracks = self._fetch_song_details(
+                track_ids,
+                progress_callback,
+                playlist_name=playlist_name,
+                cover_url=cover_url
+            )
 
         # 3. 获取本账号播放次数映射（song_id -> play_count）
         play_count_map = self._fetch_play_counts()
@@ -208,6 +227,52 @@ class NcmApiClient(PlaylistFetcher):
             # 未登录、网络错误等情况静默失败，不影响主流程
             return {}
 
+    def _fetch_remaining_tracks(self, playlist_id: str, offset: int, total: int) -> list[int]:
+        """
+        当 playlist/detail 返回的 trackIds 被截断（>1000）时，
+        通过分页接口获取剩余歌曲ID
+        :param playlist_id: 歌单ID
+        :param offset: 已获取的歌曲数（起始偏移）
+        :param total: 歌单总歌曲数
+        :return: 剩余歌曲ID列表
+        """
+        remaining_ids = []
+        limit = 200  # 每页数量，网易云分页接口通常限制 200
+        current_offset = offset
+
+        while current_offset < total:
+            try:
+                resp = requests.get(
+                    "https://music.163.com/api/playlist/track/all",
+                    params={
+                        "id": playlist_id,
+                        "limit": limit,
+                        "offset": current_offset
+                    },
+                    headers=self.headers,
+                    timeout=self.timeout
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("code") != 200:
+                    print(f"[DEBUG] 分页接口返回 code={data.get('code')}, message={data.get('message', 'N/A')}")
+                    break
+                songs = data.get("songs", [])
+                if not songs:
+                    print(f"[DEBUG] 分页接口返回空列表，offset={current_offset}")
+                    break
+                remaining_ids.extend([s["id"] for s in songs])
+                print(f"[DEBUG] 分页获取: offset={current_offset}, 获取 {len(songs)} 首，累计 {len(remaining_ids)} 首")
+                current_offset += len(songs)
+                # 避免请求过快
+                import time
+                time.sleep(0.1)
+            except Exception as e:
+                print(f"[DEBUG] 分页接口异常: {e}")
+                break
+
+        return remaining_ids
+
     def _fetch_playlist_detail(self, playlist_id: str) -> dict:
         """获取歌单详情"""
         resp = requests.get(
@@ -222,15 +287,19 @@ class NcmApiClient(PlaylistFetcher):
         if data.get("code") != 200:
             raise RuntimeError(f"获取歌单详情失败，code={data.get('code')}")
 
-        # 网易云网页端 API 返回的歌单在 result 字段
-        playlist = data.get("result") or data.get("playlist")
+        # 网易云网页端 API 返回的歌单在 result 字段（旧版）或 playlist 字段（v3）
+        playlist = data.get("playlist") or data.get("result")
         if not playlist:
             raise RuntimeError("获取歌单详情失败：返回数据中无歌单信息")
 
         return playlist
 
-    def _fetch_song_details(self, track_ids: list[int]) -> list[dict]:
-        """批量获取歌曲详情（每次最多 200 首，避免 URL 过长返回 400）"""
+    def _fetch_song_details(self, track_ids: list[int], progress_callback=None,
+                           playlist_name: str = '', cover_url: str = '') -> list[dict]:
+        """
+        批量获取歌曲详情（每次最多 200 首，避免 URL 过长返回 400）
+        :param progress_callback: 进度回调 callback(current, total, partial_songs)，每批完成后调用
+        """
         all_tracks = []
         batch_size = 200
 
@@ -249,7 +318,12 @@ class NcmApiClient(PlaylistFetcher):
             data = resp.json()
 
             if data.get("code") == 200:
-                all_tracks.extend(data.get("songs", []))
+                batch_songs = data.get("songs", [])
+                all_tracks.extend(batch_songs)
+                # 流式进度回调：传递转换后的 Song 对象列表
+                if progress_callback:
+                    partial_songs = [self._to_song(t) for t in all_tracks]
+                    progress_callback(len(all_tracks), len(track_ids), partial_songs, playlist_name)
 
         return all_tracks
 
