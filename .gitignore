@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# PyInstaller 构建产物
+build/
+dist/
+*.spec
+*.manifest
+
+# 用户数据（隐私：播放历史、歌单缓存）
+data/history.json
+data/playlists/
+
+# IDE / 工具本地文件
+.trae/
+.vscode/
+.idea/
+
+# 系统文件
+Thumbs.db
+.DS_Store
