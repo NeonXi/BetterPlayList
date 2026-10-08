@@ -1,110 +1,88 @@
-"""AwooMusicBot 管道客户端：通过命名管道向网易云注入的 DLL 发送命令（完全静默）"""
-import os
-import subprocess
-import time
+r"""Awoo bridge 命名管道客户端。
 
-# Windows 隐藏控制台窗口标志
-CREATE_NO_WINDOW = 0x08000000
+bridge DLL（AwooNcmCefBridge.dll）注入网易云后，会创建命令命名管道
+``\\.\pipe\AwooNcmCefBridge-v1-{pid}``。本模块负责：
+- probe: 发送 ``HELLO 1``，收到 ``OK READY`` 表示 bridge 已就绪
+- add_next / play：文本命令 + ``\n``，读取一行响应
+
+成功响应以 ``OK`` 开头（如 ``OK POSTED``），失败以 ``ERR`` 开头。
+整个过程不唤起网易云窗口，完全静默。
+"""
+import threading
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class AwooClient:
-    """
-    通过 AwooMusicBot 注入到网易云进程的 DLL 通信
-    完全静默，不唤起网易云窗口
-
-    支持的命令：
-    - ADD_NEXT {songId}  添加到下一首播放
-    - PLAY {songId}      播放指定歌曲
-    - PAUSE              暂停
-    - RESUME             恢复播放
-    """
+    """通过 bridge 命名管道向网易云发送命令（完全静默）。"""
 
     PIPE_PREFIX = r"\\.\pipe\AwooNcmCefBridge-v1"
 
+    # ------------------------------------------------------------------
+    # 底层调用
+    # ------------------------------------------------------------------
     @staticmethod
-    def _get_cloudmusic_pid() -> int | None:
-        """获取网易云进程ID（隐藏控制台窗口）"""
-        try:
-            result = subprocess.run(
-                ['tasklist', '/FI', 'IMAGENAME eq cloudmusic.exe', '/FO', 'CSV'],
-                capture_output=True, timeout=5,
-                creationflags=CREATE_NO_WINDOW
-            )
-            # Windows tasklist 输出为 GBK 编码
-            output = result.stdout.decode('gbk', errors='replace')
-            for line in output.split('\n')[1:]:
-                if line.strip():
-                    parts = line.strip('"').split('","')
-                    if len(parts) >= 2:
-                        return int(parts[1])
-        except Exception:
-            pass
-        return None
-
-    @staticmethod
-    def is_available() -> bool:
-        """检查 AwooMusicBot 是否可用（直接尝试打开管道，比 os.path.exists 更可靠）"""
-        pid = AwooClient._get_cloudmusic_pid()
-        if pid is None:
-            return False
-        pipe_name = rf"{AwooClient.PIPE_PREFIX}-{pid}"
-        try:
-            handle = os.open(pipe_name, os.O_RDWR)
-            os.close(handle)
-            return True
-        except OSError:
-            return False
-
-    @staticmethod
-    def _send_command(cmd: str, timeout: float = 2.0) -> str:
+    def _call(pid: int, command: str, timeout: float = 5.0) -> str | None:
         """
-        发送命令到 AwooMusicBot 管道
-        :return: 响应字符串，如果失败返回空字符串
+        向 bridge 发送一条命令并读取一行响应。
+        :return: 响应文本；连接失败或超时返回 None
         """
-        pid = AwooClient._get_cloudmusic_pid()
-        if pid is None:
-            return ""
-        pipe_name = rf"{AwooClient.PIPE_PREFIX}-{pid}"
-        try:
-            handle = os.open(pipe_name, os.O_RDWR)
+        result: dict = {"resp": None}
+
+        def _worker():
+            pipe_name = f"{AwooClient.PIPE_PREFIX}-{pid}"
             try:
-                os.write(handle, (cmd + '\n').encode())
-                # 等待响应
-                start = time.time()
-                while time.time() - start < timeout:
-                    try:
-                        resp = os.read(handle, 4096).decode('utf-8', errors='replace').strip()
-                        if resp:
-                            return resp
-                    except OSError:
-                        break
-                    time.sleep(0.05)
-            finally:
-                os.close(handle)
-        except Exception:
-            pass
-        return ""
+                # buffering=0：无缓冲二进制；readline 会读到行尾
+                handle = open(pipe_name, "r+b", buffering=0)
+                try:
+                    handle.write((command + "\n").encode("utf-8"))
+                    line = handle.readline()
+                    result["resp"] = line.decode("utf-8", errors="replace").strip()
+                finally:
+                    handle.close()
+            except Exception as exc:  # 管道不存在 / 拒绝访问等
+                result["err"] = str(exc)
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            logger.warning(f"[PIPE] 命令超时({timeout}s): {command}")
+            return None
+        if "err" in result:
+            logger.debug(f"[PIPE] 命令失败 {command}: {result['err']}")
+            return None
+        return result["resp"]
+
+    # ------------------------------------------------------------------
+    # 高层接口（均接受显式 pid）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def probe(pid: int, timeout: float = 2.0) -> tuple[bool, str]:
+        """
+        探测 bridge 是否就绪。
+        :return: (是否连接, 原始响应)
+        """
+        resp = AwooClient._call(pid, "HELLO 1", timeout=timeout)
+        if resp is None:
+            return False, ""
+        return resp.startswith("OK"), resp
 
     @staticmethod
-    def add_next(song_id: str) -> bool:
-        """添加歌曲到下一首播放"""
-        resp = AwooClient._send_command(f"ADD_NEXT {song_id}")
-        return resp.startswith("OK")
+    def add_next(pid: int, song_id: str) -> bool:
+        """添加歌曲到「下一首播放」。"""
+        resp = AwooClient._call(pid, f"ADD_NEXT {song_id}")
+        ok = bool(resp) and resp.startswith("OK")
+        if not ok:
+            logger.warning(f"[PIPE] ADD_NEXT 失败 id={song_id} resp={resp}")
+        return ok
 
     @staticmethod
-    def play(song_id: str) -> bool:
-        """播放指定歌曲"""
-        resp = AwooClient._send_command(f"PLAY {song_id}")
-        return resp.startswith("OK")
-
-    @staticmethod
-    def pause() -> bool:
-        """暂停播放"""
-        resp = AwooClient._send_command("PAUSE")
-        return resp.startswith("OK")
-
-    @staticmethod
-    def resume() -> bool:
-        """恢复播放"""
-        resp = AwooClient._send_command("RESUME")
-        return resp.startswith("OK")
+    def play(pid: int, song_id: str) -> bool:
+        """立即播放指定歌曲。"""
+        resp = AwooClient._call(pid, f"PLAY {song_id}")
+        ok = bool(resp) and resp.startswith("OK")
+        if not ok:
+            logger.warning(f"[PIPE] PLAY 失败 id={song_id} resp={resp}")
+        return ok

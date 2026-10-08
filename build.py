@@ -1,5 +1,5 @@
 """
-BetterPlayList 打包脚本 v4.0
+BetterPlayList 打包脚本 v5.0
 用法：
     python build.py              # 打包成单文件 exe
     python build.py --debug      # 打包时保留控制台窗口（便于调试）
@@ -17,7 +17,7 @@ ENTRY_SCRIPT = os.path.join(PROJECT_DIR, "main.py")
 DIST_DIR = os.path.join(PROJECT_DIR, "dist")
 BUILD_DIR = os.path.join(PROJECT_DIR, "build")
 SPEC_FILE = os.path.join(PROJECT_DIR, "BetterPlayList.spec")
-EXE_NAME = "BetterPlayList_v4.0"
+EXE_NAME = "BetterPlayList_v5.0"
 
 
 def clean():
@@ -58,11 +58,11 @@ def build(debug: bool = False, pyarmor: bool = False):
     for imp in hidden_imports:
         cmd += ["--hidden-import", imp]
 
-    # 包含的数据文件：将 AwooNcmCefBridge.dll 打包进 exe（静默注入用）
-    dll_path = os.path.join(PROJECT_DIR, "assets", "AwooNcmCefBridge.dll")
-    if os.path.exists(dll_path):
-        cmd += ["--add-binary", f"{dll_path};assets/"]
-        print(f"[打包] 包含 DLL: {dll_path}")
+    # 捆绑 bridge DLL（注入网易云所需）；PyInstaller 会解压到 _MEIPASS/assets/
+    dll_source = os.path.join(PROJECT_DIR, "assets", "AwooNcmCefBridge.dll")
+    if os.path.isfile(dll_source):
+        cmd += ["--add-binary", f"{dll_source};assets"]
+        print("[打包] 已包含 AwooNcmCefBridge.dll")
     else:
         print("[警告] 未找到 assets/AwooNcmCefBridge.dll，注入功能将不可用")
 
@@ -87,7 +87,7 @@ def build(debug: bool = False, pyarmor: bool = False):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="BetterPlayList 打包脚本 v3.0")
+    parser = argparse.ArgumentParser(description="BetterPlayList 打包脚本 v5.0")
     parser.add_argument("--debug", action="store_true", help="保留控制台窗口（调试用）")
     parser.add_argument("--pyarmor", action="store_true", help="使用 PyArmor 加密代码（需先 pip install pyarmor）")
     args = parser.parse_args()
@@ -103,7 +103,6 @@ def main():
         result = subprocess.run(
             [sys.executable, "-m", "pyarmor", "pack",
              "-e", "--onefile --noconsole --name " + EXE_NAME,
-             "-x", " --exclude src.infrastructure.awoo_client",  # 排除测试文件
              ENTRY_SCRIPT],
             cwd=PROJECT_DIR
         )
@@ -130,7 +129,7 @@ def main():
     else:
         build(debug=args.debug)
 
-    print("\n[完成] 可在 dist/ 目录找到 BetterPlayList_v4.0.exe")
+    print("\n[完成] 可在 dist/ 目录找到 BetterPlayList_v5.0.exe")
     print("[完成] 将 exe 拷贝到目标电脑即可运行，无需安装 Python")
 
 
